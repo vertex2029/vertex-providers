@@ -1,0 +1,59 @@
+name: Sync Upstream Providers
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # Check upstream every 6 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync Assets, Providers & Rebuild dist/
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Fetch and sync upstream vega-providers
+        run: node .github/scripts/sync-upstream.js
+
+      - name: Validate build metadata and rebuild dist/
+        run: |
+          node --test tests/provider-build-metadata.test.js
+          npm run test:unit
+          node --test tests/*.test.cjs
+
+      - name: Commit and push synced updates
+        run: |
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "Already up to date with upstream."
+            exit 0
+          fi
+
+          git config user.name "Vertex Providers Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add assets/ providers/ tests/ docs/ manifest.json urls.json dist/
+          if git diff --cached --quiet; then
+            echo "No tracked provider/asset/dist changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(sync): sync providers and assets from vega-providers [skip ci]"
+          git push
